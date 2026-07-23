@@ -23,7 +23,7 @@ A simple CRUD API built with FastAPI for managing tasks in memory.
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/task-api.git
+git clone https://github.com/Mohamed18122/task-api.git
 cd task-api
 ```
 
