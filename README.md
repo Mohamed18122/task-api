@@ -97,13 +97,7 @@ HTTP/1.1 200 OK
 
 ## Swagger UI
 
-Add your Swagger screenshot here after uploading it to the repository.
-
-Example:
-
-```
 ![Swagger Screenshot](swagger.jpeg)
-```
 
 ## Notes
 
