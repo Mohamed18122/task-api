@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Body
 from fastapi.responses import JSONResponse
-import sqlite3
+
 
 app = FastAPI(
     title="Task API",
@@ -8,31 +8,8 @@ app = FastAPI(
     version="1.0"
 )
 
-conn = sqlite3.connect("tasks.db", check_same_thread=False)
-conn.row_factory = sqlite3.Row
-cursor = conn.cursor()
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT NOT NULL,
-    done INTEGER NOT NULL
-)
-""")
-
-cursor.execute("SELECT COUNT(*) FROM tasks")
-count = cursor.fetchone()[0]
-
-if count == 0:
-    cursor.executemany(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        [
-            ("Study", 0),
-            ("Gym", 1),
-            ("Sleep", 0)
-        ]
-    )
-    conn.commit()
+from db import conn
+from psycopg.rows import dict_row
 
 @app.get("/", summary="API information")
 def root():
@@ -54,23 +31,21 @@ def health():
 
 @app.get("/tasks", summary="Get all tasks")
 def get_tasks():
-    cursor.execute("SELECT * FROM tasks")
-    rows = cursor.fetchall()
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute("SELECT * FROM tasks")
+        rows = cursor.fetchall()
 
-    return [
-        {
-            "id": row["id"],
-            "title": row["title"],
-            "done": bool(row["done"])
-        }
-        for row in rows
-    ]
+    return rows
 
 
 @app.get("/tasks/{task_id}", summary="Get a task by ID")
 def get_task(task_id: int):
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "SELECT * FROM tasks WHERE id = %s",
+            (task_id,)
+        )
+        row = cursor.fetchone()
 
     if row is None:
         return JSONResponse(
@@ -78,11 +53,7 @@ def get_task(task_id: int):
             content={"error": f"Task {task_id} not found"}
         )
 
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "done": bool(row["done"])
-    }
+    return row
 
 
 @app.post("/tasks", status_code=201, summary="Create a new task")
@@ -95,19 +66,14 @@ def create_task(task: dict = Body(...)):
             content={"error": "Title cannot be empty"}
         )
 
-    cursor.execute(
-        "INSERT INTO tasks (title, done) VALUES (?, ?)",
-        (title.strip(), 0)
-    )
-    conn.commit()
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "INSERT INTO tasks (title, done) VALUES (%s, %s) RETURNING *",
+            (title.strip(), False)
+        )
+        new_task = cursor.fetchone()
 
-    task_id = cursor.lastrowid
-
-    return {
-        "id": task_id,
-        "title": title.strip(),
-        "done": False
-    }
+    return new_task
 
 
 @app.put("/tasks/{task_id}", summary="Update a task")
@@ -127,8 +93,12 @@ def update_task(task_id: int, updated_task: dict = Body(...)):
             content={"error": "Invalid request body"}
         )
 
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
+    with conn.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(
+            "UPDATE tasks SET title=%s, done=%s WHERE id=%s RETURNING *",
+            (title.strip(), done, task_id)
+        )
+        row = cursor.fetchone()
 
     if row is None:
         return JSONResponse(
@@ -136,31 +106,18 @@ def update_task(task_id: int, updated_task: dict = Body(...)):
             content={"error": f"Task {task_id} not found"}
         )
 
-    cursor.execute(
-        "UPDATE tasks SET title = ?, done = ? WHERE id = ?",
-        (title.strip(), int(done), task_id)
-    )
-    conn.commit()
-
-    return {
-        "id": task_id,
-        "title": title.strip(),
-        "done": done
-    }
+    return row
 
 
 @app.delete("/tasks/{task_id}", status_code=204, summary="Delete a task")
 def delete_task(task_id: int):
-    cursor.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-    row = cursor.fetchone()
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM tasks WHERE id=%s", (task_id,))
 
-    if row is None:
-        return JSONResponse(
-            status_code=404,
-            content={"error": f"Task {task_id} not found"}
-        )
-
-    cursor.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
-    conn.commit()
+        if cursor.rowcount == 0:
+            return JSONResponse(
+                status_code=404,
+                content={"error": f"Task {task_id} not found"}
+            )
 
     return
