@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body, Depends
+from fastapi import FastAPI, Body, Depends, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
@@ -9,6 +9,21 @@ app = FastAPI(
 )
 
 security = HTTPBearer()
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    try:
+        response = supabase.auth.get_user(token)
+        return response.user
+
+    except Exception:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired token"
+        )
 
 from db import conn, supabase
 from psycopg.rows import dict_row
@@ -189,26 +204,42 @@ def public_info():
 
 @app.get("/protected/profile")
 def protected_profile(
+    user = Depends(get_current_user)
+):
+
+    return {
+        "id": user.id,
+        "email": user.email,
+        "created_at": user.created_at,
+    }
+        
+@app.get("/protected/dashboard")
+def dashboard(
+    user = Depends(get_current_user)
+):
+    return {
+        "message": "Welcome to your dashboard",
+        "user": user.email
+    }
+
+@app.post("/auth/logout", status_code=204)
+def logout(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
+
     token = credentials.credentials
 
     try:
-        response = supabase.auth.get_user(token)
-        user = response.user
+        supabase.auth.sign_out()
 
-        return {
-            "id": user.id,
-            "email": user.email,
-            "created_at": user.created_at,
-        }
+        return
 
-    except Exception as e:
-        return JSONResponse(
+    except Exception:
+        raise HTTPException(
             status_code=401,
-            content={"error": str(e)}
+            detail="Invalid token"
         )
 
-        
+
 
     return
