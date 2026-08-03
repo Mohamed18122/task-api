@@ -117,7 +117,11 @@ Then reference it like this:
 
 ## Swagger UI
 
-![Swagger Screenshot](swagger.jpeg)
+![Swagger UI](screenshots/swagger-ui.png)
+
+## Protected Profile
+
+![Protected Profile](screenshots/protected-profile.png)
 
 ## Notes
 
