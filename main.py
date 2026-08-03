@@ -8,8 +8,14 @@ app = FastAPI(
     version="1.0"
 )
 
-from db import conn
+from db import conn, supabase
 from psycopg.rows import dict_row
+
+from pydantic import BaseModel
+
+class AuthRequest(BaseModel):
+    email: str
+    password: str
 
 @app.get("/", summary="API information")
 def root():
@@ -23,6 +29,58 @@ def root():
         ]
     }
 
+
+@app.post("/auth/signup", status_code=201, summary="Sign up")
+def signup(user: AuthRequest):
+    if not user.email or not user.password:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"}
+        )
+
+    try:
+        response = supabase.auth.sign_up(
+            {
+                "email": user.email,
+                "password": user.password,
+            }
+        )
+
+        return response.user
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=400,
+            content={"error": str(e)}
+        )
+
+
+@app.post("/auth/login", summary="Log in")
+def login(user: AuthRequest):
+    if not user.email or not user.password:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"}
+        )
+
+    try:
+        response = supabase.auth.sign_in_with_password(
+            {
+                "email": user.email,
+                "password": user.password,
+            }
+        )
+
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+        }
+
+    except Exception:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid login credentials"}
+        )
 
 @app.get("/health", summary="Health check")
 def health():
