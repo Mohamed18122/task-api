@@ -123,6 +123,10 @@ Then reference it like this:
 
 ![Protected Profile](screenshots/protected-profile.png)
 
+## Repository
+
+This project is published on GitHub as part of the assignment submission.
+
 ## Notes
 
 * Tasks are stored in SQLite instead of memory.
@@ -130,3 +134,4 @@ Then reference it like this:
 * The database file (`tasks.db`) is created automatically if it does not exist.
 * The `tasks` table is also created automatically.
 * Three sample tasks are inserted only the first time the application runs.
+
