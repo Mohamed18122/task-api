@@ -1,12 +1,14 @@
-from fastapi import FastAPI, Body, Header
+from fastapi import FastAPI, Body, Depends
 from fastapi.responses import JSONResponse
-
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 app = FastAPI(
     title="Task API",
     description="A simple CRUD API for managing tasks.",
     version="1.0"
 )
+
+security = HTTPBearer()
 
 from db import conn, supabase
 from psycopg.rows import dict_row
@@ -186,19 +188,26 @@ def public_info():
 
 
 @app.get("/protected/profile")
-def protected_profile(authorization: str = Header(None)):
-    if not authorization or not authorization.startswith("Bearer "):
+def protected_profile(
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+):
+    token = credentials.credentials
+
+    try:
+        response = supabase.auth.get_user(token)
+        user = response.user
+
+        return {
+            "id": user.id,
+            "email": user.email,
+            "created_at": user.created_at,
+        }
+
+    except Exception as e:
         return JSONResponse(
             status_code=401,
-            content={"error": "Access token required"}
+            content={"error": str(e)}
         )
-
-    token = authorization.replace("Bearer ", "")
-
-    return {
-        "message": "Token received",
-        "token": token
-    }
 
         
 
