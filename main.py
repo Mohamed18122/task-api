@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Body
+from fastapi import FastAPI, Body, Header
 from fastapi.responses import JSONResponse
 
 
@@ -177,5 +177,29 @@ def delete_task(task_id: int):
                 status_code=404,
                 content={"error": f"Task {task_id} not found"}
             )
+
+@app.get("/public/info")
+def public_info():
+    return {
+        "message": "Welcome stranger! This info is public."
+    }
+
+
+@app.get("/protected/profile")
+def protected_profile(authorization: str = Header(None)):
+    if not authorization or not authorization.startswith("Bearer "):
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"}
+        )
+
+    token = authorization.replace("Bearer ", "")
+
+    return {
+        "message": "Token received",
+        "token": token
+    }
+
+        
 
     return
