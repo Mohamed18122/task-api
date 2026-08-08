@@ -7,6 +7,7 @@ import re
 
 import requests
 from bs4 import BeautifulSoup
+from pydantic import BaseModel, HttpUrl, ValidationError
 
 
 BASE_URL = "https://books.toscrape.com/catalogue/page-1.html"
@@ -20,20 +21,45 @@ TIMEOUT = 10
 DELAY_SECONDS = 0.5
 
 # Set to True only when testing failure handling.
-# Normal run should stay False.
+# Normal runs should stay False.
 INJECT_FAILURE_FOR_TEST = False
 
 FAKE_FAILURE_URL = (
-    "https://books.toscrape.com/catalogue/this-page-does-not-exist_999999/index.html"
+    "https://books.toscrape.com/catalogue/"
+    "this-page-does-not-exist_999999/index.html"
 )
 
 CACHE_DIR = Path(__file__).parent.parent / "cache"
-CATALOGUE_CACHE = CACHE_DIR / "catalogue-page-1.html"
 BOOK_CACHE_DIR = CACHE_DIR / "book-pages"
 
 OUTPUT_DIR = Path(__file__).parent.parent / "output"
+
 BOOKS_OUTPUT = OUTPUT_DIR / "books.json"
+ERRORS_OUTPUT = OUTPUT_DIR / "errors.json"
 RUN_REPORT_OUTPUT = OUTPUT_DIR / "run-report.json"
+
+
+class BookRecord(BaseModel):
+    title: str
+    product_url: HttpUrl
+
+    price_text: str | None
+    price_gbp: float | None
+
+    availability_text: str | None
+    availability: int | None
+
+    rating_text: str | None
+    rating: int | None
+
+    description: str | None
+
+    source_page: HttpUrl
+    fetched_at: datetime
+
+
+def catalogue_cache_file(page_number: int) -> Path:
+    return CACHE_DIR / f"catalogue-page-{page_number}.html"
 
 
 def fetch_page(
@@ -43,17 +69,12 @@ def fetch_page(
 ) -> str:
 
     if cache_file and cache_file.exists():
-
-        html = cache_file.read_text(
-            encoding="utf-8"
-        )
+        html = cache_file.read_text(encoding="utf-8")
 
         if stats is not None:
             stats["cache_hits"] += 1
 
-        print(
-            f"CACHE HIT: {len(html)} bytes"
-        )
+        print(f"CACHE HIT: {len(html)} bytes - {url}")
 
         return html
 
@@ -74,15 +95,14 @@ def fetch_page(
     html = response.text
 
     if cache_file:
-
         cache_file.parent.mkdir(
             parents=True,
-            exist_ok=True
+            exist_ok=True,
         )
 
         cache_file.write_text(
             html,
-            encoding="utf-8"
+            encoding="utf-8",
         )
 
     if stats is not None:
@@ -90,7 +110,7 @@ def fetch_page(
 
     print(
         f"FETCH: HTTP {response.status_code}, "
-        f"{len(html)} bytes"
+        f"{len(html)} bytes - {url}"
     )
 
     return html
@@ -98,12 +118,12 @@ def fetch_page(
 
 def discover_books_from_page(
     html: str,
-    page_url: str
+    page_url: str,
 ) -> list[str]:
 
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
     )
 
     urls = []
@@ -111,33 +131,27 @@ def discover_books_from_page(
     for article in soup.select(
         "article.product_pod"
     ):
-
-        link = article.select_one(
-            "h3 a"
-        )
+        link = article.select_one("h3 a")
 
         if link and link.get("href"):
-
             absolute_url = urljoin(
                 page_url,
-                link["href"]
+                link["href"],
             )
 
-            urls.append(
-                absolute_url
-            )
+            urls.append(absolute_url)
 
     return urls
 
 
 def find_next_page(
     html: str,
-    page_url: str
+    page_url: str,
 ) -> str | None:
 
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
     )
 
     next_link = soup.select_one(
@@ -145,22 +159,21 @@ def find_next_page(
     )
 
     if next_link and next_link.get("href"):
-
         return urljoin(
             page_url,
-            next_link["href"]
+            next_link["href"],
         )
 
     return None
 
 
 def discover_three_catalogue_pages(
-    stats: dict
-) -> list[str]:
+    stats: dict,
+) -> list[dict]:
 
     current_url = BASE_URL
 
-    all_book_urls = []
+    discovered_books = []
 
     catalogue_pages = 0
 
@@ -168,76 +181,76 @@ def discover_three_catalogue_pages(
 
         catalogue_pages += 1
 
-        if catalogue_pages == 1:
+        cache_file = catalogue_cache_file(
+            catalogue_pages
+        )
 
-            html = fetch_page(
-                current_url,
-                CATALOGUE_CACHE,
-                stats
-            )
-
-        else:
-
-            html = fetch_page(
-                current_url,
-                stats=stats
-            )
+        html = fetch_page(
+            current_url,
+            cache_file,
+            stats,
+        )
 
         book_urls = discover_books_from_page(
             html,
-            current_url
+            current_url,
         )
 
-        all_book_urls.extend(
-            book_urls
-        )
+        for book_url in book_urls:
+            discovered_books.append(
+                {
+                    "product_url": book_url,
+                    "source_page": current_url,
+                }
+            )
 
         current_url = find_next_page(
             html,
-            current_url
+            current_url,
         )
 
-    unique_urls = list(
-        dict.fromkeys(
-            all_book_urls
-        )
-    )
+    # Remove duplicate product URLs while
+    # preserving their original source page.
+    unique_books = []
+    seen_urls = set()
+
+    for item in discovered_books:
+        product_url = item["product_url"]
+
+        if product_url not in seen_urls:
+            seen_urls.add(product_url)
+            unique_books.append(item)
 
     print(
         f"catalogue_pages={catalogue_pages}"
     )
 
     print(
-        f"discovered={len(all_book_urls)}"
+        f"discovered={len(discovered_books)}"
     )
 
     print(
-        f"unique_urls={len(unique_urls)}"
+        f"unique_urls={len(unique_books)}"
     )
 
     stats["catalogue_pages"] = catalogue_pages
 
-    return unique_urls
+    return unique_books
 
 
 def book_cache_file(
-    url: str
+    url: str,
 ) -> Path:
 
     match = re.search(
         r"_([0-9]+)/index.html$",
-        url
+        url,
     )
 
     if match:
-
         book_id = match.group(1)
-
     else:
-
-        book_id = str(
-            abs(hash(url))
-        )
+        book_id = str(abs(hash(url)))
 
     return (
         BOOK_CACHE_DIR
@@ -246,31 +259,29 @@ def book_cache_file(
 
 
 def fetch_book_pages(
-    book_urls: list[str],
-    stats: dict
+    books: list[dict],
+    stats: dict,
 ) -> None:
 
     BOOK_CACHE_DIR.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
-    total = len(book_urls)
+    total = len(books)
 
-    for index, url in enumerate(
-        book_urls,
-        start=1
+    for index, book in enumerate(
+        books,
+        start=1,
     ):
+
+        url = book["product_url"]
 
         cache_file = book_cache_file(
             url
         )
 
         if cache_file.exists():
-
-            cache_file.read_text(
-                encoding="utf-8"
-            )
 
             stats["cache_hits"] += 1
 
@@ -305,7 +316,7 @@ def fetch_book_pages(
 
                     cache_file.write_text(
                         html,
-                        encoding="utf-8"
+                        encoding="utf-8",
                     )
 
                     stats["pages_fetched"] += 1
@@ -320,10 +331,10 @@ def fetch_book_pages(
 
                     break
 
-                # No retry for 403 / 404.
+                # Never retry 403 or 404.
                 if response.status_code in (
                     403,
-                    404
+                    404,
                 ):
 
                     print(
@@ -408,7 +419,7 @@ def fetch_book_pages(
             )
 
     print(
-        f"detail_pages={len(book_urls)}"
+        f"detail_pages={len(books)}"
     )
 
     print(
@@ -427,12 +438,12 @@ def fetch_book_pages(
 def extract_book_record(
     html: str,
     product_url: str,
-    source_page: str
+    source_page: str,
 ) -> dict:
 
     soup = BeautifulSoup(
         html,
-        "html.parser"
+        "html.parser",
     )
 
     title_element = soup.select_one(
@@ -474,7 +485,7 @@ def extract_book_record(
     availability_text = (
         availability_element.get_text(
             " ",
-            strip=True
+            strip=True,
         )
         if availability_element
         else None
@@ -483,18 +494,17 @@ def extract_book_record(
     rating_text = None
 
     if rating_element:
-
-        rating_text = " ".join(
-            rating_element.get(
-                "class",
-                []
-            )
+        classes = rating_element.get(
+            "class",
+            [],
         )
+
+        rating_text = " ".join(classes)
 
     description = (
         description_element.get_text(
             " ",
-            strip=True
+            strip=True,
         )
         if description_element
         else None
@@ -517,18 +527,21 @@ def extract_book_record(
 
 
 def extract_all_records(
-    book_urls: list[str],
-    stats: dict
+    books: list[dict],
+    stats: dict,
 ) -> list[dict]:
 
     records = []
 
-    total = len(book_urls)
+    total = len(books)
 
-    for index, url in enumerate(
-        book_urls,
-        start=1
+    for index, book in enumerate(
+        books,
+        start=1,
     ):
+
+        url = book["product_url"]
+        source_page = book["source_page"]
 
         cache_file = book_cache_file(
             url
@@ -552,7 +565,7 @@ def extract_all_records(
             record = extract_book_record(
                 html,
                 url,
-                BASE_URL
+                source_page,
             )
 
             records.append(
@@ -576,6 +589,16 @@ def extract_all_records(
 
             stats["invalid_records"] += 1
 
+            stats["errors"].append(
+                {
+                    "product_url": url,
+                    "reason": (
+                        f"{type(exc).__name__}: "
+                        f"{exc}"
+                    ),
+                }
+            )
+
     print(
         f"records={len(records)}"
     )
@@ -584,7 +607,7 @@ def extract_all_records(
 
 
 def clean_price(
-    price_text: str | None
+    price_text: str | None,
 ) -> float | None:
 
     if not price_text:
@@ -592,7 +615,7 @@ def clean_price(
 
     match = re.search(
         r"([0-9]+(?:\.[0-9]+)?)",
-        price_text
+        price_text,
     )
 
     if not match:
@@ -604,7 +627,7 @@ def clean_price(
 
 
 def clean_availability(
-    availability_text: str | None
+    availability_text: str | None,
 ) -> int | None:
 
     if not availability_text:
@@ -612,7 +635,7 @@ def clean_availability(
 
     match = re.search(
         r"\((\d+)\s+available\)",
-        availability_text
+        availability_text,
     )
 
     if not match:
@@ -624,7 +647,7 @@ def clean_availability(
 
 
 def clean_rating(
-    rating_text: str | None
+    rating_text: str | None,
 ) -> int | None:
 
     if not rating_text:
@@ -641,25 +664,29 @@ def clean_rating(
     for word, value in rating_map.items():
 
         if word in rating_text:
-
             return value
 
     return None
 
 
 def normalize_book_record(
-    record: dict
+    record: dict,
 ) -> dict:
 
     return {
         "title": record["title"],
         "product_url": record["product_url"],
-        "price": clean_price(
+        "price_text": record["price_text"],
+        "price_gbp": clean_price(
             record["price_text"]
         ),
+        "availability_text": record[
+            "availability_text"
+        ],
         "availability": clean_availability(
             record["availability_text"]
         ),
+        "rating_text": record["rating_text"],
         "rating": clean_rating(
             record["rating_text"]
         ),
@@ -670,53 +697,33 @@ def normalize_book_record(
 
 
 def validate_record(
-    record: dict
-) -> bool:
+    record: dict,
+) -> BookRecord:
 
-    required_fields = [
-        "title",
-        "product_url",
-        "price",
-        "availability",
-        "rating",
-        "description",
-        "source_page",
-        "fetched_at",
-    ]
-
-    for field in required_fields:
-
-        if field not in record:
-            return False
-
-    if not record["title"]:
-        return False
-
-    if not record["product_url"]:
-        return False
-
-    return True
+    return BookRecord.model_validate(
+        record
+    )
 
 
 def save_books(
-    records: list[dict]
+    records: list[dict],
 ) -> None:
 
     OUTPUT_DIR.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
     )
 
     with BOOKS_OUTPUT.open(
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
     ) as file:
 
         json.dump(
             records,
             file,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         )
 
     print(
@@ -724,15 +731,41 @@ def save_books(
     )
 
 
-def save_run_report(
-    stats: dict,
-    start_time: datetime,
-    end_time: datetime
+def save_errors(
+    errors: list[dict],
 ) -> None:
 
     OUTPUT_DIR.mkdir(
         parents=True,
-        exist_ok=True
+        exist_ok=True,
+    )
+
+    with ERRORS_OUTPUT.open(
+        "w",
+        encoding="utf-8",
+    ) as file:
+
+        json.dump(
+            errors,
+            file,
+            ensure_ascii=False,
+            indent=2,
+        )
+
+    print(
+        f"saved errors: {ERRORS_OUTPUT}"
+    )
+
+
+def save_run_report(
+    stats: dict,
+    start_time: datetime,
+    end_time: datetime,
+) -> None:
+
+    OUTPUT_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
     )
 
     duration = (
@@ -768,14 +801,14 @@ def save_run_report(
 
     with RUN_REPORT_OUTPUT.open(
         "w",
-        encoding="utf-8"
+        encoding="utf-8",
     ) as file:
 
         json.dump(
             report,
             file,
             ensure_ascii=False,
-            indent=2
+            indent=2,
         )
 
     print(
@@ -798,12 +831,13 @@ if __name__ == "__main__":
         "invalid_records": 0,
         "failed_pages": 0,
         "failed_page_urls": [],
+        "errors": [],
     }
 
     try:
 
         # Stage 1 + Stage 2
-        book_urls = discover_three_catalogue_pages(
+        books = discover_three_catalogue_pages(
             stats
         )
 
@@ -811,8 +845,11 @@ if __name__ == "__main__":
         # adds ONE fake URL only when enabled.
         if INJECT_FAILURE_FOR_TEST:
 
-            book_urls.append(
-                FAKE_FAILURE_URL
+            books.append(
+                {
+                    "product_url": FAKE_FAILURE_URL,
+                    "source_page": BASE_URL,
+                }
             )
 
             print(
@@ -822,14 +859,14 @@ if __name__ == "__main__":
 
         # Stage 2 / Stage 5
         fetch_book_pages(
-            book_urls,
-            stats
+            books,
+            stats,
         )
 
         # Stage 3
         records = extract_all_records(
-            book_urls,
-            stats
+            books,
+            stats,
         )
 
         # Stage 4
@@ -841,17 +878,37 @@ if __name__ == "__main__":
                 record
             )
 
-            if validate_record(
-                clean_record
-            ):
+            try:
 
-                normalized_records.append(
+                validated_record = validate_record(
                     clean_record
                 )
 
-            else:
+                normalized_records.append(
+                    validated_record.model_dump(
+                        mode="json"
+                    )
+                )
+
+            except ValidationError as exc:
 
                 stats["invalid_records"] += 1
+
+                error = {
+                    "product_url": record.get(
+                        "product_url"
+                    ),
+                    "reason": str(exc),
+                }
+
+                stats["errors"].append(
+                    error
+                )
+
+                print(
+                    f"INVALID RECORD: "
+                    f"{error}"
+                )
 
         stats["valid_records"] = len(
             normalized_records
@@ -862,9 +919,12 @@ if __name__ == "__main__":
             f"{len(normalized_records)}"
         )
 
-        # Save the 60 valid records.
         save_books(
             normalized_records
+        )
+
+        save_errors(
+            stats["errors"]
         )
 
         if normalized_records:
@@ -882,30 +942,40 @@ if __name__ == "__main__":
         save_run_report(
             stats,
             start_time,
-            end_time
+            end_time,
         )
 
         print()
-        print("========== RUN SUMMARY ==========")
+        print(
+            "========== RUN SUMMARY =========="
+        )
+
         print(
             f"valid_records="
             f"{stats['valid_records']}"
         )
+
         print(
             f"invalid_records="
             f"{stats['invalid_records']}"
         )
+
         print(
             f"failed_pages="
             f"{stats['failed_pages']}"
         )
+
         print(
             f"pages_fetched="
             f"{stats['pages_fetched']}"
         )
+
         print(
             f"cache_hits="
             f"{stats['cache_hits']}"
         )
-        print("=================================")
+
+        print(
+            "================================="
+        )
 
